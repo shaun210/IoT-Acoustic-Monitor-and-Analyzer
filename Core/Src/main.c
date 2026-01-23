@@ -116,7 +116,6 @@ uint8_t alarm_active = 0;   // Prevent spamming WiFi
 /**Wifi**/
 uint8_t  MAC_Addr[6] = {0};
 uint8_t RemoteIP[] = { 10, 13, 170, 182 };
-//uint8_t RemoteIP[] = { 100,107,45,161};
 
 int32_t Socket = -1;
 int16_t Trials = CONNECTION_TRIAL_MAX;
