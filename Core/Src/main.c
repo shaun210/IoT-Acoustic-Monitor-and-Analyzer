@@ -41,17 +41,32 @@
 
 #define USER_SSID     "Shaun"
 #define PASSWORD "titeufff"
-
-
 #define RemotePORT	8002
-
 #define WIFI_WRITE_TIMEOUT 10000
 #define WIFI_READ_TIMEOUT  10000
-
 #define CONNECTION_TRIAL_MAX          10
-
 #define TERMINAL_USE
 
+
+/** Smart monitor timing PD **/
+// 1. How long is one "tick"? (1024 samples / 12.5kHz)
+#define FRAME_MS 81
+
+// 2. How far back do we remember? (The Window)
+#define WINDOW_SEC 5
+#define WINDOW_SIZE (WINDOW_SEC * 1000 / FRAME_MS) // ~238 frames
+
+// 3. How much crying is "Enough Proof"? (The Trigger)
+#define PROOF_SEC 2
+#define TRIGGER_THRESHOLD (PROOF_SEC * 1000 / FRAME_MS) // ~190 frames
+
+
+/** Process_fft**/
+ #define VOLUME_THRESHOLD 5000
+ #define CRY_FREQ_MIN 300
+ #define CRY_FREQ_MAX 800
+#define SAMPLE_RATE       12500  // (Clock speed/divider) / oversampling rate
+#define FFT_LEN           1024   // Must match your buffer processing size
 
 
 /* USER CODE END PD */
@@ -68,7 +83,7 @@ DMA_HandleTypeDef hdma_dfsdm1_flt0;
 
 I2C_HandleTypeDef hi2c2;
 
-
+//SPI_HandleTypeDef hspi3;
 
 UART_HandleTypeDef huart1;
 
@@ -92,6 +107,11 @@ float fft_in_buf[FFT_LEN];    // Input: Audio in floats
 float fft_out_buf[FFT_LEN];   // Output: Complex numbers (Real + Imaginary)
 float fft_mag_buf[FFT_LEN/2]; // Final: Magnitude (Just the loudness)
 volatile uint8_t buffer_state = 0;
+
+uint8_t vote_history[WINDOW_SIZE] = {0};
+uint16_t history_idx = 0;   // Where are we writing in the circle?
+uint16_t current_score = 0; // Running sum of votes (How many 1s are in the array?)
+uint8_t alarm_active = 0;   // Prevent spamming WiFi
 
 /**Wifi**/
 uint8_t  MAC_Addr[6] = {0};
@@ -123,7 +143,7 @@ static void MX_DMA_Init(void);
 static void MX_DFSDM1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_I2C2_Init(void);
-static void MX_SPI3_Init(void);
+//static void MX_SPI3_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -145,9 +165,8 @@ int _write(int file, char *ptr, int len)
   return len;
 }
 
-void Process_FFT(int32_t *source_buffer)
+float Process_FFT(int32_t *source_buffer)
 {
-
     // --- STEP 1: MATH (Calculate FFT) ---
     // 1. Remove DC Offset
     int64_t sum = 0;
@@ -160,25 +179,64 @@ void Process_FFT(int32_t *source_buffer)
     arm_rfft_fast_f32(&fft_handler, fft_in_buf, fft_out_buf, 0);
     arm_cmplx_mag_f32(fft_out_buf, fft_mag_buf, FFT_LEN/2);
 
+    // --- STEP 2: ANALYZE (Find the Peak) ---
+    float maxVal = 0.0f;
+    uint32_t maxIndex = 0;
 
+    for (int i = 2; i < FFT_LEN/2; i++)
+    {
+        if (fft_mag_buf[i] > maxVal)
+        {
+            maxVal = fft_mag_buf[i];
+            maxIndex = i;
+        }
+    }
 
+    // Convert Bin Index to Frequency in Hz
+    float dominant_freq = (float)maxIndex * ((float)SAMPLE_RATE / (float)FFT_LEN);
+
+    // --- DEBUG PRINT BEGIN ---
+    // We use a static counter to print only every ~20th frame (approx every 0.5 sec)
+    // otherwise the terminal moves too fast to read.
+    static uint8_t print_counter = 0;
+    if (++print_counter > 20)
+    {
+        // This tells you EXACTLY what the mic is hearing right now
+        printf("[DEBUG] Freq: %.0f Hz | Vol: %.0f | DC Offset: %.0f\r\n", dominant_freq, maxVal, avg);
+        print_counter = 0;
+    }
+    // --- DEBUG PRINT END ---
+
+    // --- STEP 3: FILTER (Is it a baby?) ---
+
+    if (maxVal > VOLUME_THRESHOLD)
+    {
+        if (dominant_freq >= CRY_FREQ_MIN && dominant_freq <= CRY_FREQ_MAX)
+        {
+            // Optional: Print immediately if we actually detect a baby
+            printf(">>> MATCH! Baby Frequency Detected: %.0f Hz <<<\r\n", dominant_freq);
+            return dominant_freq; // Return the frequency found!
+        }
+    }
+
+    return 0.0f; // Return 0 if silence or non-baby noise
 }
 
 void Connect_to_Mobile() {
 
     if(WIFI_Init() == WIFI_STATUS_OK) {
-        TERMOUT("> WIFI Module Initialized.\n");
+        TERMOUT("> WIFI Module Initialized.\r\n");
 //        Scan_For_Networks();
         HAL_Delay(2000);
         if(WIFI_GetMAC_Address(MAC_Addr, sizeof(MAC_Addr)) == WIFI_STATUS_OK)
         {
-            TERMOUT("> es-wifi module MAC Address : %X:%X:%X:%X:%X:%X\n",
+            TERMOUT("> es-wifi module MAC Address : %X:%X:%X:%X:%X:%X\r\n",
                      MAC_Addr[0], MAC_Addr[1], MAC_Addr[2],
                      MAC_Addr[3], MAC_Addr[4], MAC_Addr[5]);
         }
         else
         {
-            TERMOUT("> ERROR : CANNOT get MAC address\n");
+            TERMOUT("> ERROR : CANNOT get MAC address\r\n");
             BSP_LED_On(LED2);
         }
 
@@ -186,28 +244,28 @@ void Connect_to_Mobile() {
         // WPA_WPA2_PSK often handles "Security: 3" better on some hotspots
         if( WIFI_Connect(USER_SSID, PASSWORD, WIFI_ECN_WPA2_PSK) == WIFI_STATUS_OK)
         {
-            TERMOUT("> es-wifi module connected \n");
+            TERMOUT("> es-wifi module connected \r\n");
             // --- Standard Success Path ---
             if(WIFI_GetIP_Address(IP_Addr, sizeof(IP_Addr)) == WIFI_STATUS_OK)
             {
-                TERMOUT("> es-wifi module got IP Address : %d.%d.%d.%d\n",
+                TERMOUT("> es-wifi module got IP Address : %d.%d.%d.%d\r\n",
                        IP_Addr[0], IP_Addr[1], IP_Addr[2], IP_Addr[3]);
 
-                TERMOUT("> Trying to connect to Server: %d.%d.%d.%d:%d ...\n",
+                TERMOUT("> Trying to connect to Server: %d.%d.%d.%d:%d ...\r\n",
                        RemoteIP[0], RemoteIP[1], RemoteIP[2], RemoteIP[3], RemotePORT);
 
                 while (Trials--)
                 {
                     if( WIFI_OpenClientConnection(0, WIFI_TCP_PROTOCOL, "TCP_CLIENT", RemoteIP, RemotePORT, 0) == WIFI_STATUS_OK)
                     {
-                        TERMOUT("> TCP Connection opened successfully.\n");
+                        TERMOUT("> TCP Connection opened successfully.\r\n");
                         Socket = 0;
                         break;
                     }
                 }
                 if(Socket == -1)
                 {
-                    TERMOUT("> ERROR : Cannot open Connection\n");
+                    TERMOUT("> ERROR : Cannot open Connection\r\n");
                     BSP_LED_On(LED2);
                 }
             }
@@ -227,7 +285,7 @@ void Connect_to_Mobile() {
     }
     else
     {
-        TERMOUT("> ERROR : WIFI Module cannot be initialized.\n");
+        TERMOUT("> ERROR : WIFI Module cannot be initialized.\r\n");
         BSP_LED_On(LED2);
     }
 }
@@ -266,8 +324,8 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();
-  MX_DFSDM1_Init();
+//  MX_DMA_Init();
+//  MX_DFSDM1_Init();
   MX_USART1_UART_Init();
   MX_I2C2_Init();
 //  MX_SPI3_Init();
@@ -280,28 +338,27 @@ int main(void)
 
   Connect_to_Mobile();
 
-//  MX_DMA_Init();
-//  MX_DFSDM1_Init();
-//
-//  HAL_StatusTypeDef status;
-//
-//  arm_rfft_fast_init_f32(&fft_handler, FFT_LEN);
-//
-//  status = HAL_DFSDM_FilterRegularStart_DMA(&hdfsdm1_filter0, RecBuff, BUFF_SIZE);
-//
-//  printf("yolo2\n");
-//
-//  if (status != HAL_OK)
-//  {
-//      // If you are in Debug mode, put a breakpoint here!
-//      // Check if status is HAL_BUSY or HAL_ERROR
-//      Error_Handler();
-//  }
-//
-//  if (HAL_DFSDM_FilterRegularStart(&hdfsdm1_filter0) != HAL_OK)
-//    {
-//  	  Error_Handler();
-//    }
+  MX_DMA_Init();
+  MX_DFSDM1_Init();
+
+  HAL_StatusTypeDef status;
+
+  arm_rfft_fast_init_f32(&fft_handler, FFT_LEN);
+
+  status = HAL_DFSDM_FilterRegularStart_DMA(&hdfsdm1_filter0, RecBuff, BUFF_SIZE);
+
+  printf("yolo2\r\n");
+
+  printf("\r\n");
+
+  printf("\r\n");
+
+  if (status != HAL_OK)
+  {
+      // If you are in Debug mode, put a breakpoint here!
+      // Check if status is HAL_BUSY or HAL_ERROR
+      Error_Handler();
+  }
 
   /* USER CODE END 2 */
 
@@ -309,7 +366,71 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
+
+
+	  if (buffer_state != 0)
+	      {
+	          // 1. Get the Audio Data
+	          int32_t *current_chunk = (buffer_state == 1) ? &RecBuff[0] : &RecBuff[BUFF_SIZE/2];
+
+	          // 2. Run the Math (FFT)
+	          // returns frequency (e.g., 450.0) if cry detected, or 0.0 if not
+	          float freq = Process_FFT(current_chunk);
+
+	          // 3. Cast the Vote (1 or 0)
+	          uint8_t new_vote = (freq > 0) ? 1 : 0;
+
+	          // 4. Update the "Sliding Window" (O(1) Efficiency)
+	          // A. Remove the oldest vote from the score (the one we are about to overwrite)
+	          current_score -= vote_history[history_idx];
+
+	          // B. Add the new vote to the score
+	          current_score += new_vote;
+
+	          // C. Save the new vote in the buffer
+	          vote_history[history_idx] = new_vote;
+
+	          // D. Move the index forward (wrap around like a clock)
+	          history_idx++;
+	          if (history_idx >= WINDOW_SIZE) history_idx = 0;
+
+	          // 5. Check for "Enough Proof"
+	          if (current_score >= TRIGGER_THRESHOLD)
+	          {
+	              // We have 4 seconds of crying inside our 5 second memory!
+	              if (alarm_active == 0)
+	              {
+	                   printf("!!! ALARM TRIGGERED !!! (Score: %d/%d)\n", current_score, WINDOW_SIZE);
+	                   BSP_LED_On(LED2);
+
+	                   // Send Wi-Fi Alert
+	                   if (Socket >= 0) {
+	                       char msg[64];
+	                       sprintf(msg, "ALERT: Baby Crying Detected! (%.0f Hz)\n", freq);
+	                       WIFI_SendData(Socket, (uint8_t*)msg, strlen(msg), &Datalen, WIFI_WRITE_TIMEOUT);
+	                   }
+
+	                   alarm_active = 1; // Lock logic so we don't spam
+	              }
+	          }
+	          else
+	          {
+	              // Optional: Hysteresis (Wait for score to drop below 3s to clear alarm)
+	              // This prevents flickering if the baby is right on the edge.
+	              if (current_score < (TRIGGER_THRESHOLD - 50) && alarm_active == 1)
+	              {
+	                   printf("Alarm Cleared. (Score: %d)\n", current_score);
+	                   BSP_LED_Off(LED2);
+	                   alarm_active = 0;
+	              }
+	          }
+
+	          buffer_state = 0; // Reset Flag
+	      }
     /* USER CODE END WHILE */
+
+
 
     /* USER CODE BEGIN 3 */
 
@@ -385,7 +506,7 @@ static void MX_DFSDM1_Init(void)
   hdfsdm1_filter0.Instance = DFSDM1_Filter0;
   hdfsdm1_filter0.Init.RegularParam.Trigger = DFSDM_FILTER_SW_TRIGGER;
   hdfsdm1_filter0.Init.RegularParam.FastMode = DISABLE;
-  hdfsdm1_filter0.Init.RegularParam.DmaMode = DISABLE;
+  hdfsdm1_filter0.Init.RegularParam.DmaMode = ENABLE;
   hdfsdm1_filter0.Init.FilterParam.SincOrder = DFSDM_FILTER_SINC3_ORDER;
   hdfsdm1_filter0.Init.FilterParam.Oversampling = 64;
   hdfsdm1_filter0.Init.FilterParam.IntOversampling = 1;
@@ -396,7 +517,7 @@ static void MX_DFSDM1_Init(void)
   hdfsdm1_channel2.Instance = DFSDM1_Channel2;
   hdfsdm1_channel2.Init.OutputClock.Activation = ENABLE;
   hdfsdm1_channel2.Init.OutputClock.Selection = DFSDM_CHANNEL_OUTPUT_CLOCK_SYSTEM;
-  hdfsdm1_channel2.Init.OutputClock.Divider = 26;
+  hdfsdm1_channel2.Init.OutputClock.Divider = 100;
   hdfsdm1_channel2.Init.Input.Multiplexer = DFSDM_CHANNEL_EXTERNAL_INPUTS;
   hdfsdm1_channel2.Init.Input.DataPacking = DFSDM_CHANNEL_STANDARD_MODE;
   hdfsdm1_channel2.Init.Input.Pins = DFSDM_CHANNEL_SAME_CHANNEL_PINS;
@@ -472,16 +593,16 @@ static void MX_I2C2_Init(void)
   * @brief SPI3 Initialization Function
   * @param None
   * @retval None
-//  */
+  */
 //static void MX_SPI3_Init(void)
 //{
 //
 //  /* USER CODE BEGIN SPI3_Init 0 */
-//////
+//
 //  /* USER CODE END SPI3_Init 0 */
 //
 //  /* USER CODE BEGIN SPI3_Init 1 */
-//////
+//
 //  /* USER CODE END SPI3_Init 1 */
 //  /* SPI3 parameter configuration*/
 //  hspi3.Instance = SPI3;
@@ -503,7 +624,7 @@ static void MX_I2C2_Init(void)
 //    Error_Handler();
 //  }
 //  /* USER CODE BEGIN SPI3_Init 2 */
-//////
+//
 //  /* USER CODE END SPI3_Init 2 */
 //
 //}

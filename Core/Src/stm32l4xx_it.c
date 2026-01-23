@@ -234,11 +234,11 @@ void DMA1_Channel4_IRQHandler(void)
 //void SPI3_IRQHandler(void)
 //{
 //  /* USER CODE BEGIN SPI3_IRQn 0 */
-////
+//
 //  /* USER CODE END SPI3_IRQn 0 */
 //  HAL_SPI_IRQHandler(&hspi3);
 //  /* USER CODE BEGIN SPI3_IRQn 1 */
-////xxxxxx
+//
 //  /* USER CODE END SPI3_IRQn 1 */
 //}
 
