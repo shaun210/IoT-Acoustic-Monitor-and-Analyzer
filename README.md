@@ -6,6 +6,9 @@ A real-time, edge-based acoustic monitoring system designed for high-performance
 
 The project is structured to minimize CPU overhead by utilizing hardware peripherals for data movement and transformation.
 
+
+![Acoustic Architecture](images/AcousticMonitorDiagram.png)
+
 - **Acquisition:** A MEMS Microphone captures ambient sound, transmitting a PDM (Pulse Density Modulation) stream to the MCU.
 
 - **Ingestion:** The DFSDM (Digital Filter for Sigma-Delta Modulators) peripheral interprets the 1s and 0s, converting them into PCM audio samples.
