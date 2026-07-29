@@ -45,9 +45,17 @@ _Min_Stack_Size = 0x1000; /* required amount of stack */
 /* Memories definition */
 MEMORY
 {
-  RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 96K
-  RAM2    (xrw)    : ORIGIN = 0x10000000,   LENGTH = 32K
-  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 1024K
+  RAM        (xrw) : ORIGIN = 0x20000000,   LENGTH = 96K
+  RAM2       (xrw) : ORIGIN = 0x10000000,   LENGTH = 32K
+  
+  /* Bootloader is now 30K instead of 32K */
+  BOOTLOADER (rx)  : ORIGIN = 0x08000000,   LENGTH = 30K 
+  
+  /* New dedicated Metadata sector (2K) */
+  META_DATA  (rx)  : ORIGIN = 0x08007800,   LENGTH = 2K  
+  
+  FLASH      (rx)  : ORIGIN = 0x08008000,   LENGTH = 496K  /* Slot A */
+  SLOT_B     (rx)  : ORIGIN = 0x08084000,   LENGTH = 496K  /* Slot B */
 }
 
 /* Sections */
