@@ -41,7 +41,7 @@ typedef struct {
 } OTA_Metadata_t;
 
 /* Function Prototypes */
-void Check_For_Update_OTA(server_update_info_t *info);
+int Check_For_Update_OTA(server_update_info_t *info);
 void Download_And_Flash_Update(server_update_info_t *update_info);
 bool Verify_Downloaded_Firmware(uint32_t expected_crc, uint32_t file_size_bytes);
 void Initialize_Metadata_If_Fresh(void);

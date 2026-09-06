@@ -39,3 +39,6 @@
 Debug/
 Release/
 build/
+# Credentials and Secrets
+Core/Inc/secrets.h
+secrets.h

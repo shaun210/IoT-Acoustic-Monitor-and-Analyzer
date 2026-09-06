@@ -5,25 +5,46 @@
 #include <string.h>
 
 
+#define USER_SSID "Waneve"
+#define PASSWORD "WAApassword2210"
+#define RemotePORT	8080
+#define WIFI_WRITE_TIMEOUT 10000
+#define WIFI_READ_TIMEOUT  10000
+#define CONNECTION_TRIAL_MAX          10
+#define TERMINAL_USE
+
+
+uint8_t  IP_Addr[4] = {0};
+
+uint8_t  MAC_Addr[6] = {0};
+
+uint8_t RemoteIP[4] = { 10, 0, 0, 236 };
 
 
 
-int Init_And_Connect_WiFi(void) {
-    printf("\r\n> === Booting Wi-Fi Module ===\r\n");
-
-
-    // restart wifi module//
+void WIFI_Hardware_Reset(void) {
+    printf("> Power-cycling Wi-Fi Module...\r\n");
     __HAL_RCC_GPIOE_CLK_ENABLE();
     GPIO_InitTypeDef GPIO_InitStruct = {0};
-    GPIO_InitStruct.Pin = GPIO_PIN_8; // Pin connected to WIFI module power state
+    GPIO_InitStruct.Pin = GPIO_PIN_8; // pin connect to power state of WIFI module
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+
     HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, GPIO_PIN_RESET);
     HAL_Delay(100);
     HAL_GPIO_WritePin(GPIOE, GPIO_PIN_8, GPIO_PIN_SET);
     HAL_Delay(500);
+}
+
+
+
+
+int Init_And_Connect_WiFi(void) {
+
+    // restart wifi module//
+    WIFI_Hardware_Reset();
 
 
     if(WIFI_Init() == WIFI_STATUS_OK) {
@@ -55,22 +76,21 @@ int Init_And_Connect_WiFi(void) {
 
 
 
-void Connect_To_Backend_API(void) {
+int Open_TCP_Connection(void) {
     printf("\r\n> === Connecting to Python Backend ===\r\n");
     printf("> Target: %d.%d.%d.%d:%d\r\n", RemoteIP[0], RemoteIP[1], RemoteIP[2], RemoteIP[3], RemotePORT);
 
     int trials = CONNECTION_TRIAL_MAX;
-    while (trials--) {
+    while (trials > 0) {
         if( WIFI_OpenClientConnection(0, WIFI_TCP_PROTOCOL, "TCP_CLIENT", RemoteIP, RemotePORT, 0) == WIFI_STATUS_OK) {
             printf("> Backend API Connection opened successfully.\r\n");
-            Socket = 0;
-            return;
+            return 1;
         }
+        trials--;
         HAL_Delay(500);
     }
-
     printf("> ERROR : Cannot open Backend API Connection\r\n");
-    BSP_LED_On(LED2);
+    return 0;
 }
 
 
